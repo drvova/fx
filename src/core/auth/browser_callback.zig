@@ -1,6 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const debug_trace = @import("../shared/debug_trace.zig");
 const io_mod = @import("../shared/io.zig");
+const winsock = @import("../shared/winsock.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -171,6 +173,15 @@ fn listenerReady(
     cancel_flag: Cancellation,
 ) !bool {
     if (cancel_flag.cancelled()) return error.Cancelled;
+    if (comptime builtin.target.os.tag == .windows) {
+        const readiness = try winsock.waitReadable(listener.socket.handle, poll_ms);
+        if (cancel_flag.cancelled()) return error.Cancelled;
+        return switch (readiness) {
+            .timeout => false,
+            .readable => true,
+            .failed => error.OAuthCallbackListenerFailed,
+        };
+    }
     var fds = [_]std.posix.pollfd{.{
         .fd = listener.socket.handle,
         .events = std.posix.POLL.IN,
@@ -197,6 +208,13 @@ fn requestReadable(
             0
         else
             @intCast(@min(remaining_ms, poll_ms));
+        if (comptime builtin.target.os.tag == .windows) {
+            const readiness = try winsock.waitReadable(socket, wait_ms);
+            if (cancel_flag.cancelled()) return error.Cancelled;
+            if (readiness != .timeout) return true;
+            if (remaining_ms <= 0) return false;
+            continue;
+        }
         var fds = [_]std.posix.pollfd{.{
             .fd = socket,
             .events = std.posix.POLL.IN,

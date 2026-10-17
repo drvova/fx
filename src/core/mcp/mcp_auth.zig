@@ -3,6 +3,7 @@ const host_target = @import("../hosts/target.zig");
 const builtin = @import("builtin");
 const debug_trace = @import("../shared/debug_trace.zig");
 const io_mod = @import("../shared/io.zig");
+const winsock = @import("../shared/winsock.zig");
 const mem_utils = @import("../shared/mem_utils.zig");
 const operation_control = @import("operation_control.zig");
 const browser_callback = @import("../auth/browser_callback.zig");
@@ -2271,6 +2272,12 @@ fn validateJsonContentType(content_type: ?[]const u8) !void {
 
 fn setSocketTimeouts(socket: std.posix.socket_t, seconds: i64) void {
     if (comptime host_target.is_wasm) return;
+    if (comptime builtin.target.os.tag == .windows) {
+        const millis: u32 = @intCast(std.math.clamp(seconds * 1000, 0, std.math.maxInt(u32)));
+        winsock.setTimeout(socket, .receive, millis) catch debug_trace.logf("mcp", "OAuth receive timeout setup failed", .{});
+        winsock.setTimeout(socket, .send, millis) catch debug_trace.logf("mcp", "OAuth send timeout setup failed", .{});
+        return;
+    }
     const timeout = std.posix.timeval{ .sec = seconds, .usec = 0 };
     const receive_rc = std.c.setsockopt(
         socket,

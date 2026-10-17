@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing_allocator = @import("../shared/testing_allocator.zig");
 const builtin = @import("builtin");
+const file_permissions = @import("../shared/file_permissions.zig");
 const mcp_auth = @import("mcp_auth.zig");
 const native_keychain = @import("../hosts/native_keychain.zig");
 const io_mod = @import("../shared/io.zig");
@@ -506,7 +507,7 @@ fn normalizeAndVerifyPrivateDir(dir: std.Io.Dir) !void {
         std.Io.File.Permissions.fromMode(0o700),
     );
     const stat = try dir.stat(io_mod.getIo());
-    if (stat.kind != .directory or stat.permissions.toMode() & 0o777 != 0o700) {
+    if (stat.kind != .directory or !file_permissions.isExactly(stat.permissions, 0o700)) {
         return error.PrivateStatePermissionsUnsupported;
     }
 }
@@ -582,7 +583,7 @@ fn loadFromDir(alloc: Allocator, dir: *io_mod.VerifiedDir) !?Store {
     defer file.close(io_mod.getIo());
     const stat = try file.stat(io_mod.getIo());
     if (stat.kind != .file or stat.nlink != 1) return error.DurablePathUnsafe;
-    if (stat.permissions.toMode() & 0o777 != 0o600) {
+    if (!file_permissions.isExactly(stat.permissions, 0o600)) {
         return error.PrivateStatePermissionsUnsupported;
     }
     const bytes = try io_mod.readFileToEnd(alloc, &file, max_store_bytes);

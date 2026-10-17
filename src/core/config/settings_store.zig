@@ -1,4 +1,5 @@
 const std = @import("std");
+const file_permissions = @import("../shared/file_permissions.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
 const io_mod = @import("../shared/io.zig");
 const mem_utils = @import("../shared/mem_utils.zig");
@@ -375,10 +376,10 @@ pub const Store = struct {
         const stat = try durable_home.stat(zio);
         if (stat.kind != .directory) return error.DurablePathUnsafe;
         const durable_mode = stat.permissions.toMode() & 0o777;
-        if (mode == .writable and durable_mode != 0o700) {
+        if (mode == .writable and !file_permissions.isExactly(stat.permissions, 0o700)) {
             return error.PrivateStatePermissionsUnsupported;
         }
-        if (mode == .read_only and durableModeWritableByGroupOrOther(durable_mode)) {
+        if (mode == .read_only and file_permissions.has_mode_bits and durableModeWritableByGroupOrOther(durable_mode)) {
             return error.PrivateStatePermissionsUnsupported;
         }
 
@@ -738,10 +739,10 @@ pub const Store = struct {
         }
         const verified_stat = if (self.mode == .writable) try file.stat(zio) else stat;
         const primary_mode = verified_stat.permissions.toMode() & 0o777;
-        if (self.mode == .writable and primary_mode != 0o600) {
+        if (self.mode == .writable and !file_permissions.isExactly(verified_stat.permissions, 0o600)) {
             return error.PrivateStatePermissionsUnsupported;
         }
-        if (self.mode == .read_only and durableModeWritableByGroupOrOther(primary_mode)) {
+        if (self.mode == .read_only and file_permissions.has_mode_bits and durableModeWritableByGroupOrOther(primary_mode)) {
             return error.PrivateStatePermissionsUnsupported;
         }
         if (verified_stat.size > max_settings_bytes) return .oversized;

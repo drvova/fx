@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const debug_trace = @import("../../core/shared/debug_trace.zig");
 const io_mod = @import("../../core/shared/io.zig");
 const url_policy = @import("url_policy.zig");
@@ -450,6 +451,8 @@ fn isRetryableConnectError(err: anyerror) bool {
 }
 
 fn connectDefault(_: *anyopaque, alloc: Allocator, target: PinnedTarget, options: FetchOptions) anyerror!ConnectorResponse {
+    // The pinned connection uses BSD sockets directly; Winsock is not ported.
+    if (comptime builtin.target.os.tag == .windows) return error.WebFetchUnsupportedOnWindows;
     const effective = normalizedOptions(options);
     const dialer: Dialer = .{
         .ctx = @ptrCast(&default_connector_ctx),

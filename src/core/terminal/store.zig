@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing_allocator = @import("../shared/testing_allocator.zig");
 const contracts = @import("contracts.zig");
 const operation = @import("operation.zig");
@@ -396,7 +397,7 @@ pub const Record = struct {
             return error.InvalidTerminalRecord;
         }
         if (self.takeover_owner_pid) |pid| {
-            _ = std.fmt.parseInt(std.posix.pid_t, pid, 10) catch
+            _ = std.fmt.parseInt(if (builtin.target.os.tag == .windows) u32 else std.posix.pid_t, pid, 10) catch
                 return error.InvalidTerminalRecord;
             _ = process_identity.ProcessInstanceToken.parse(
                 self.takeover_owner_process_token.?,

@@ -64,7 +64,7 @@ fn readAdmitted(arena: Allocator, path: []const u8) ![]const u8 {
     var file = try std.Io.Dir.openFileAbsolute(io, path, .{ .follow_symlinks = false, .allow_directory = false });
     defer file.close(io);
     const stat = try file.stat(io);
-    if (stat.kind != .file or stat.nlink != 1 or (stat.permissions.toMode() & 0o077) != 0 or stat.size > max_bytes) return error.InvalidSnapshot;
+    if (stat.kind != .file or stat.nlink != 1 or io_mod.file_permissions.grantsGroupOrOther(stat.permissions) or stat.size > max_bytes) return error.InvalidSnapshot;
     const bytes = try arena.alloc(u8, @intCast(stat.size));
     var offset: usize = 0;
     while (offset < bytes.len) {

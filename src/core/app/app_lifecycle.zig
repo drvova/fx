@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const io_mod = @import("../shared/io.zig");
+const stdio = @import("../shared/stdio.zig");
 const agent_steps = @import("../config/agent_steps.zig");
 const config_runtime = @import("../config/config_runtime.zig");
 const auth_runtime = @import("../auth/auth_runtime.zig");
@@ -1530,7 +1531,7 @@ fn emitShutdownCleanupAndResume(shell: *TranscriptRuntime, metrics: *Metrics) vo
 }
 
 pub fn writeLifecycleTerminalBytes(shell: *TranscriptRuntime, metrics: *Metrics, bytes: []const u8) !void {
-    try shell.stdout_file.writeStreamingAll(io_mod.getIo(), bytes);
+    try stdio.resolveStdout(shell.stdout_file).writeStreamingAll(io_mod.getIo(), bytes);
     if (shell.shadow_vt) |grid| {
         grid.feed(bytes) catch |err| debug_trace.logf(
             "render",

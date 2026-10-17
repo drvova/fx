@@ -61,6 +61,10 @@ jobs:
       - name: Build
         run: zig build -Doptimize=${{ matrix.optimize }}
 
+      # Keeps the native Windows port compiling. Its binary runs only on Windows.
+      - name: Cross-compile for Windows
+        run: zig build -Dtarget=x86_64-windows -Doptimize=${{ matrix.optimize }} -p zig-out-windows
+
       - name: Test
         env:
           TEST_TIMEOUT_SECONDS: ${{ matrix.test_timeout_seconds }}

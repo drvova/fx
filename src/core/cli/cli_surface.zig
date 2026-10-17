@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const io_mod = @import("../shared/io.zig");
+const stdio = @import("../shared/stdio.zig");
 const app_lifecycle = @import("../app/app_lifecycle.zig");
 const auth_runtime = @import("../auth/auth_runtime.zig");
 const chatgpt_oauth = @import("../auth/chatgpt_oauth.zig");
@@ -1877,7 +1878,7 @@ fn runNonInteractiveWithDeps(
                 return .handled_failure;
             };
             // A relative $HOME counts as unset, as everywhere else in fx.
-            const home = deps.getenv(deps.env_ctx, "HOME") orelse "";
+            const home = depsHome(deps) orelse "";
             if (!std.Io.Dir.path.isAbsolute(home)) {
                 try writeUsageCommandFailure(alloc, deps, error.HomeNotSet, opts.format);
                 return .handled_failure;
@@ -2137,9 +2138,16 @@ fn runPasteSetup(
     return true;
 }
 
+/// `$HOME`, or on Windows `%USERPROFILE%` when HOME is unset, as
+/// `io_mod.homeDir` reads it.
+fn depsHome(deps: RunDeps) ?[]const u8 {
+    if (deps.getenv(deps.env_ctx, "HOME")) |home| return home;
+    if (comptime builtin.target.os.tag == .windows) return deps.getenv(deps.env_ctx, "USERPROFILE");
+    return null;
+}
+
 fn setupTerminalAvailableDefault(_: ?*anyopaque) bool {
-    return std.c.isatty(std.posix.STDIN_FILENO) != 0 and
-        std.c.isatty(std.posix.STDERR_FILENO) != 0;
+    return stdio.isTty(.stdin) and stdio.isTty(.stderr);
 }
 
 fn readMaskedKeyDefault(
@@ -2158,7 +2166,7 @@ fn readMaskedKeyDefault(
 
     while (input.items.len < 8 * 1024) {
         var byte: [1]u8 = undefined;
-        if (try std.posix.read(std.posix.STDIN_FILENO, &byte) == 0) return error.SetupCancelled;
+        if (try stdio.readStdin(&byte) == 0) return error.SetupCancelled;
         switch (byte[0]) {
             '\r', '\n' => {
                 if (input.items.len == 0) continue;
@@ -2186,17 +2194,18 @@ fn readMaskedKeyDefault(
 }
 
 const MaskedKeyRawMode = struct {
-    original: std.posix.termios = undefined,
+    original: stdio.SavedMode = undefined,
     active: bool = false,
 
     fn enable() !MaskedKeyRawMode {
-        if (std.c.isatty(std.posix.STDIN_FILENO) == 0 or
-            std.c.isatty(std.posix.STDERR_FILENO) == 0)
-        {
-            return error.NotATerminal;
-        }
+        if (!stdio.isTty(.stdin) or !stdio.isTty(.stderr)) return error.NotATerminal;
 
         var self: MaskedKeyRawMode = .{};
+        if (comptime builtin.target.os.tag == .windows) {
+            self.original = try stdio.enterRawWindows();
+            self.active = true;
+            return self;
+        }
         self.original = try io_mod.tcgetattr(std.posix.STDIN_FILENO);
         var raw = self.original;
         raw.iflag.BRKINT = false;
@@ -2229,7 +2238,11 @@ const MaskedKeyRawMode = struct {
 
     fn disable(self: *MaskedKeyRawMode) void {
         if (!self.active) return;
-        io_mod.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
+        if (comptime builtin.target.os.tag == .windows) {
+            stdio.restoreWindows(self.original);
+        } else {
+            io_mod.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
+        }
         self.active = false;
     }
 };
@@ -2523,7 +2536,7 @@ fn runTopLevelMcp(
             try writeTopLevelUsage(cfg.command_catalog, deps, .mcp);
             return .handled_failure;
         }
-        const home = deps.getenv(deps.env_ctx, "HOME") orelse {
+        const home = depsHome(deps) orelse {
             try writeMcpOperationFailure(alloc, deps, "path", error.HomeNotSet);
             return .handled_failure;
         };
@@ -2653,7 +2666,7 @@ fn runTopLevelMcp(
 
 /// `fx mcp` on MCP-v2: the verbs `/mcp` shares.
 fn runMcpVerbs(alloc: Allocator, rest: []const [:0]const u8, cfg: Config, deps: RunDeps) !RunResult {
-    const home = deps.getenv(deps.env_ctx, "HOME") orelse {
+    const home = depsHome(deps) orelse {
         try writeStderr(deps, "fx mcp: HOME isn't set\n");
         return .handled_failure;
     };

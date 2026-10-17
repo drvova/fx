@@ -18,6 +18,7 @@
 //! server's group SIGTERM from any thread and wait for none of them.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("../core/stdio_conn.zig");
 const wire = @import("../protocol/wire.zig");
 const lines = @import("lines.zig");
@@ -152,11 +153,12 @@ pub const Process = struct {
         everyone.list.remove(&p.node);
         everyone.mutex.unlock(p.io);
         p.pid_lock.lockUncancelable(p.io);
-        if (p.pid) |pid| {
+        // `spawn` never sets `pid` on Windows.
+        if (comptime builtin.target.os.tag != .windows) if (p.pid) |pid| {
             std.posix.kill(pid, .KILL) catch {};
             _ = std.c.waitpid(pid, null, 0);
             p.pid = null;
-        }
+        };
         p.pid_lock.unlock(p.io);
         if (p.stdin) |file| file.close(p.io);
         p.stdin = null;
@@ -309,6 +311,9 @@ pub const Process = struct {
 
     fn spawn(p: *Process, generation: core.Generation) SpawnError!void {
         std.debug.assert(p.stdin == null);
+        // Process groups and `waitpid` are POSIX; the default v1 MCP client
+        // runs stdio servers on Windows.
+        if (comptime builtin.target.os.tag == .windows) return error.OperationUnsupported;
         const child = try std.process.spawn(p.io, .{
             .argv = p.options.argv,
             .environ_map = p.options.environ_map,
@@ -346,6 +351,7 @@ pub const Process = struct {
     }
 
     fn signal(p: *Process, which: core.Signal) void {
+        if (comptime builtin.target.os.tag == .windows) return;
         p.pid_lock.lockUncancelable(p.io);
         defer p.pid_lock.unlock(p.io);
         const pid = p.pid orelse return;

@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing_allocator = @import("../shared/testing_allocator.zig");
 const builtin = @import("builtin");
+const file_permissions = @import("../shared/file_permissions.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
 const host_contract = @import("../hosts/host.zig");
 const host_target = @import("../hosts/target.zig");
@@ -312,7 +313,7 @@ fn observeAuthFile(alloc: Allocator, fx_dir: *std.Io.Dir) !FileObservation {
         debug_trace.logf("auth", "session load failed source=file step=stat err={s}", .{@errorName(err)});
         return .unusable;
     };
-    if (stat.kind != .file or stat.nlink != 1 or stat.permissions.toMode() & 0o077 != 0) {
+    if (stat.kind != .file or stat.nlink != 1 or file_permissions.grantsGroupOrOther(stat.permissions)) {
         debug_trace.logf("auth", "session load failed source=file step=permissions err=InsecureAuthFile", .{});
         return .unusable;
     }
@@ -682,7 +683,7 @@ fn loadFromDir(alloc: Allocator, fx_dir: *std.Io.Dir) !?Session {
     defer file.close(io_mod.getIo());
 
     const stat = file.stat(io_mod.getIo()) catch |err| return session_presence.storageError(auth_file_name, err);
-    if (stat.kind != .file or stat.nlink != 1 or stat.permissions.toMode() & 0o077 != 0) {
+    if (stat.kind != .file or stat.nlink != 1 or file_permissions.grantsGroupOrOther(stat.permissions)) {
         debug_trace.logf("auth", "session load failed step=permissions err=InsecureAuthFile", .{});
         return error.InsecureAuthFile;
     }
@@ -832,7 +833,7 @@ fn openExistingPrivateFxDir(home_dir: *io_mod.VerifiedDir) !io_mod.VerifiedDir {
     };
     const stat = try dir.stat(io_mod.getIo());
     if (stat.kind != .directory) return error.DurablePathUnsafe;
-    if (stat.permissions.toMode() & 0o777 != 0o700) {
+    if (!file_permissions.isExactly(stat.permissions, 0o700)) {
         return error.PrivateStatePermissionsUnsupported;
     }
     return .{ .dir = dir };

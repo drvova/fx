@@ -1133,8 +1133,13 @@ fn captureSnapshot(alloc: Allocator, pid: std.posix.pid_t) !ProcessSnapshot {
     return switch (builtin.target.os.tag) {
         .linux => try captureLinuxSnapshot(alloc, pid),
         .macos => try captureMacOSSnapshot(pid),
-        else => error.ProcessTreeUnsupported,
+        else => unsupportedSnapshot(),
     };
+}
+
+/// Names `ProcessNotFound` so callers that handle it compile everywhere.
+fn unsupportedSnapshot() error{ ProcessTreeUnsupported, ProcessNotFound }!ProcessSnapshot {
+    return error.ProcessTreeUnsupported;
 }
 
 fn captureLinuxSnapshot(alloc: Allocator, pid: std.posix.pid_t) !ProcessSnapshot {

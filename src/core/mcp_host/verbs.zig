@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const io_mod = @import("../shared/io.zig");
+const process_stdio = @import("../shared/stdio.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
 const text_utils = @import("../shared/text_utils.zig");
 const profile_paths = @import("../shared/profile_paths.zig");
@@ -789,10 +790,10 @@ fn waitForLogin(c: Context, arena: Allocator, host: *Host, waiter: *Waiter, open
 
 /// A complete line from stdin, waiting at most 100 ms for one.
 fn readPasted(arena: Allocator, line: *std.ArrayList(u8)) !?[]const u8 {
-    var fds = [_]std.posix.pollfd{.{ .fd = std.posix.STDIN_FILENO, .events = std.posix.POLL.IN, .revents = 0 }};
-    if (try std.posix.poll(&fds, 100) == 0) return null;
+    const ready = try process_stdio.pollStdin(100);
+    if (!ready.readable and !ready.hung_up) return null;
     var buffer: [1024]u8 = undefined;
-    const n = std.posix.read(std.posix.STDIN_FILENO, &buffer) catch return null;
+    const n = process_stdio.readStdin(&buffer) catch return null;
     if (n == 0) {
         // stdin closed: wait for the browser instead.
         io_mod.sleep(100 * std.time.ns_per_ms);

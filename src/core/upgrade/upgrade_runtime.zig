@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const io_mod = @import("../shared/io.zig");
 const output_contracts = @import("../output/output_contracts.zig");
 const helpers = @import("upgrade_helpers.zig");
@@ -31,6 +32,7 @@ const RunError = error{
     ReplaceFailed,
     OutOfMemory,
     Cancelled,
+    UnsupportedPlatform,
 };
 
 pub fn run(
@@ -48,6 +50,9 @@ fn runInner(
     channel: update_target.Channel,
     format: output_contracts.OutputFormat,
 ) RunError!RunResult {
+    // Releases ship as tar.gz for macOS and Linux only, and Windows cannot
+    // overwrite a running executable in place.
+    if (comptime builtin.target.os.tag == .windows) return error.UnsupportedPlatform;
     var done = std.atomic.Value(bool).init(false);
     var progress = ProgressState{};
     var worker_result = WorkerResult{};
@@ -139,6 +144,7 @@ fn failureMessage(err: RunError) []const u8 {
         error.SelfExeNotFound => "could not determine path of running binary",
         error.ReplaceFailed => "failed to replace binary (permission denied?)",
         error.OutOfMemory => "out of memory",
+        error.UnsupportedPlatform => "fx upgrade is not available on Windows yet",
         error.Cancelled => "upgrade cancelled",
     };
 }

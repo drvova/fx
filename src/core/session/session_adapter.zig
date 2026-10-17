@@ -135,8 +135,7 @@ fn traceWiring(comptime action: []const u8, session_id: []const u8, comptime det
 }
 
 fn processId() i64 {
-    if (comptime builtin.target.os.tag == .wasi) return 0;
-    return std.c.getpid();
+    return io_mod.currentProcessId();
 }
 
 // ---------------------------------------------------------------------------

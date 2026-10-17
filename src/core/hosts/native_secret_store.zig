@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const file_permissions = @import("../shared/file_permissions.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
 const host = @import("host.zig");
 const io_mod = @import("../shared/io.zig");
@@ -82,7 +83,7 @@ fn presenceInProfile() host.SecretStorePresence {
     const stat = fx_dir.statFile(io_mod.getIo(), profile_paths.api_key_file_name, .{
         .follow_symlinks = false,
     }) catch |err| return if (err == error.FileNotFound) .missing else .unavailable;
-    if (stat.kind != .file or stat.permissions.toMode() & 0o077 != 0) return .unavailable;
+    if (stat.kind != .file or file_permissions.grantsGroupOrOther(stat.permissions)) return .unavailable;
     return if (stat.size == 0) .missing else .present;
 }
 
@@ -155,7 +156,7 @@ fn loadFromDir(alloc: Allocator, fx_dir: *std.Io.Dir) LoadError!?[]u8 {
         debug_trace.logf("stored_key", "load failed step=stat err={s}", .{@errorName(err)});
         return error.StoredKeyUnreadable;
     };
-    if (stat.kind != .file or stat.permissions.toMode() & 0o077 != 0) {
+    if (stat.kind != .file or file_permissions.grantsGroupOrOther(stat.permissions)) {
         debug_trace.logf("stored_key", "load failed step=permissions err=StoredKeyInsecure", .{});
         return error.StoredKeyInsecure;
     }

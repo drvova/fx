@@ -8,6 +8,7 @@ const debug_trace = @import("../shared/debug_trace.zig");
 const host = @import("../hosts/host.zig");
 const host_target = @import("../hosts/target.zig");
 const io_mod = @import("../shared/io.zig");
+const stdio = @import("../shared/stdio.zig");
 const js_host_auth = @import("js_host_auth.zig");
 const oauth = @import("oauth.zig");
 const oauth_session = @import("oauth_session.zig");
@@ -1146,14 +1147,9 @@ fn unavailableWaitForEnter(_: ?*anyopaque, _: u64) bool {
 }
 
 fn realWaitForEnter(_: ?*anyopaque, timeout_ms: u64) bool {
-    var fds = [_]std.posix.pollfd{.{
-        .fd = std.posix.STDIN_FILENO,
-        .events = std.posix.POLL.IN,
-        .revents = 0,
-    }};
     const timeout: i32 = @intCast(@min(timeout_ms, @as(u64, @intCast(std.math.maxInt(i32)))));
-    const ready = std.posix.poll(&fds, timeout) catch return false;
-    if (ready == 0 or (fds[0].revents & std.posix.POLL.IN) == 0) return false;
+    const ready = stdio.pollStdin(timeout) catch return false;
+    if (!ready.readable) return false;
     discardStdinLine();
     return true;
 }
@@ -1161,7 +1157,7 @@ fn realWaitForEnter(_: ?*anyopaque, timeout_ms: u64) bool {
 fn discardStdinLine() void {
     var buf: [256]u8 = undefined;
     while (true) {
-        const n = std.posix.read(std.posix.STDIN_FILENO, &buf) catch return;
+        const n = stdio.readStdin(&buf) catch return;
         if (n == 0) return;
         if (std.mem.findScalar(u8, buf[0..n], '\n') != null) return;
     }
@@ -1329,7 +1325,7 @@ fn selectTeamInteractive(alloc: Allocator, teams: []const Team, default_index: u
 
 fn canUseInteractiveTeamPicker() bool {
     const stdin_tty = std.Io.File.stdin().isTty(io_mod.getIo()) catch false;
-    return stdin_tty and std.c.isatty(std.posix.STDOUT_FILENO) != 0;
+    return stdin_tty and stdio.isTty(.stdout);
 }
 
 fn renderTeamPicker(
@@ -1364,21 +1360,16 @@ const TeamPickerKey = union(enum) {
 
 fn readTeamPickerKey() !TeamPickerKey {
     var buf: [8]u8 = undefined;
-    const first_read = try std.posix.read(std.posix.STDIN_FILENO, buf[0..1]);
+    const first_read = try stdio.readStdin(buf[0..1]);
     if (first_read == 0) return .ignored;
 
     var len = first_read;
     if (buf[0] == 0x1b) {
         while (len < buf.len) {
             if (escapeSequenceComplete(buf[0..len])) break;
-            var fds = [_]std.posix.pollfd{.{
-                .fd = std.posix.STDIN_FILENO,
-                .events = std.posix.POLL.IN,
-                .revents = 0,
-            }};
-            const ready = try std.posix.poll(&fds, 25);
-            if (ready == 0 or (fds[0].revents & std.posix.POLL.IN) == 0) break;
-            const n = try std.posix.read(std.posix.STDIN_FILENO, buf[len .. len + 1]);
+            const ready = try stdio.pollStdin(25);
+            if (!ready.readable) break;
+            const n = try stdio.readStdin(buf[len .. len + 1]);
             if (n == 0) break;
             len += n;
         }
@@ -1417,15 +1408,18 @@ fn parseEscapeTeamPickerKey(bytes: []const u8) TeamPickerKey {
 }
 
 const TeamPickerRawMode = struct {
-    original: std.posix.termios = undefined,
+    original: stdio.SavedMode = undefined,
     active: bool = false,
 
     fn enable() !TeamPickerRawMode {
-        if (std.c.isatty(std.posix.STDIN_FILENO) == 0 or std.c.isatty(std.posix.STDOUT_FILENO) == 0) {
-            return error.NotATerminal;
-        }
+        if (!stdio.isTty(.stdin) or !stdio.isTty(.stdout)) return error.NotATerminal;
 
         var self = TeamPickerRawMode{};
+        if (comptime builtin.target.os.tag == .windows) {
+            self.original = try stdio.enterRawWindows();
+            self.active = true;
+            return self;
+        }
         self.original = try io_mod.tcgetattr(std.posix.STDIN_FILENO);
         var raw = self.original;
 
@@ -1457,7 +1451,11 @@ const TeamPickerRawMode = struct {
 
     fn disable(self: *TeamPickerRawMode) void {
         if (!self.active) return;
-        io_mod.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
+        if (comptime builtin.target.os.tag == .windows) {
+            stdio.restoreWindows(self.original);
+        } else {
+            io_mod.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
+        }
         self.active = false;
     }
 };

@@ -10,6 +10,7 @@
 //! The file is disposable: a missing, corrupt, or older-version index is
 //! rebuilt from the session directories, which remain the only authority.
 const std = @import("std");
+const file_permissions = @import("../shared/file_permissions.zig");
 const testing_allocator = @import("../shared/testing_allocator.zig");
 const io_mod = @import("../shared/io.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
@@ -175,7 +176,7 @@ pub const Loaded = struct {
         var file = try io_mod.openExistingRegularFile(dir, file_name, .read_only);
         defer file.close(io_mod.getIo());
         const stat = try file.stat(io_mod.getIo());
-        if (stat.kind != .file or stat.nlink > 1 or (stat.permissions.toMode() & 0o077) != 0 or stat.size > max_bytes) return error.InvalidCatalogCache;
+        if (stat.kind != .file or stat.nlink > 1 or file_permissions.grantsGroupOrOther(stat.permissions) or stat.size > max_bytes) return error.InvalidCatalogCache;
         const bytes = try alloc.alloc(u8, @intCast(stat.size));
         errdefer alloc.free(bytes);
         var offset: usize = 0;
@@ -495,7 +496,9 @@ fn sameStat(a: std.Io.File.Stat, b: std.Io.File.Stat) bool {
 }
 
 fn addStat(hash: *Sha256, stat: std.Io.File.Stat) void {
-    const values = [_]u128{ stat.inode, stat.nlink, stat.size, @backingInt(stat.kind), stat.permissions.toMode(), @bitCast(@as(i128, stat.mtime.nanoseconds)), @bitCast(@as(i128, stat.ctime.nanoseconds)) };
+    // Windows file indexes are signed.
+    const inode: u128 = @bitCast(@as(i128, stat.inode));
+    const values = [_]u128{ inode, stat.nlink, stat.size, @backingInt(stat.kind), stat.permissions.toMode(), @bitCast(@as(i128, stat.mtime.nanoseconds)), @bitCast(@as(i128, stat.ctime.nanoseconds)) };
     var bytes: [16]u8 = undefined;
     for (values) |value| {
         std.mem.writeInt(u128, &bytes, value, .little);

@@ -19,6 +19,7 @@ fn captureToken(
     alloc: Allocator,
     pid_text: []const u8,
 ) process_provider.ProviderError!process_identity.ProcessInstanceToken {
+    if (comptime builtin.target.os.tag == .windows) return error.ProcessIdentityUnsupported;
     const pid = std.fmt.parseInt(std.posix.pid_t, pid_text, 10) catch
         return error.InvalidPid;
     return switch (builtin.target.os.tag) {
@@ -228,6 +229,8 @@ fn signalProcess(
         .unavailable => return error.ProcessIdentityIndeterminate,
     }
     if (!host.current().process_control) return error.Unsupported;
+    // Process trees and signals are POSIX.
+    if (comptime builtin.target.os.tag == .windows) return error.Unsupported;
     const pid = std.fmt.parseInt(std.posix.pid_t, pid_text, 10) catch
         return error.InvalidPid;
     var tracker = try process_tree.Tracker.init(alloc);

@@ -27,6 +27,7 @@
 //!   create it.
 
 const std = @import("std");
+const file_permissions = @import("../shared/file_permissions.zig");
 const io_mod = @import("../shared/io.zig");
 const session_event = @import("session_event.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
@@ -611,7 +612,7 @@ fn openCacheFile(dir: *io_mod.VerifiedDir, mode: std.Io.Dir.OpenFileOptions.Mode
     errdefer file.close(io_mod.getIo());
     const stat = try file.stat(io_mod.getIo());
     if (stat.kind != .file or stat.nlink != 1) return error.HistoryCacheUnsafe;
-    if (mode == .read_write and stat.permissions.toMode() & 0o777 != 0o600)
+    if (mode == .read_write and !file_permissions.isExactly(stat.permissions, 0o600))
         return error.HistoryCachePermissionsUnsupported;
     return file;
 }
@@ -628,7 +629,7 @@ fn createCacheFile(dir: *io_mod.VerifiedDir) !std.Io.File {
     file.setPermissions(io_mod.getIo(), private_file_permissions) catch return error.HistoryCachePermissionsUnsupported;
     const stat = try file.stat(io_mod.getIo());
     if (stat.kind != .file or stat.nlink != 1) return error.HistoryCacheUnsafe;
-    if (stat.permissions.toMode() & 0o777 != 0o600) return error.HistoryCachePermissionsUnsupported;
+    if (!file_permissions.isExactly(stat.permissions, 0o600)) return error.HistoryCachePermissionsUnsupported;
     return file;
 }
 

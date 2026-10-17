@@ -43,6 +43,23 @@ const GracefulExitSigintGuard = if (host_target.is_wasm) struct {
     }
 
     fn deinit(_: *@This()) void {}
+} else if (builtin.target.os.tag == .windows) struct {
+    // A null handler with `TRUE` makes the process ignore Ctrl+C, as
+    // `SIG_IGN` does for `SIGINT`.
+    extern "kernel32" fn SetConsoleCtrlHandler(handler: ?*const anyopaque, add: i32) callconv(.winapi) i32;
+
+    installed: bool = false,
+
+    fn install(enabled: bool) @This() {
+        if (!enabled) return .{};
+        return .{ .installed = SetConsoleCtrlHandler(null, 1) != 0 };
+    }
+
+    fn deinit(self: *@This()) void {
+        if (!self.installed) return;
+        _ = SetConsoleCtrlHandler(null, 0);
+        self.installed = false;
+    }
 } else struct {
     saved_action: ?std.posix.Sigaction = null,
 

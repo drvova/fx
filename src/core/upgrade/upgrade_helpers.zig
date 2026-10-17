@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const io_mod = @import("../shared/io.zig");
+const winsock = @import("../shared/winsock.zig");
 const update_target = @import("update_target.zig");
 const text_utils = @import("../shared/text_utils.zig");
 
@@ -15,6 +16,10 @@ const Target = update_target.Target;
 
 fn setRecvTimeout(conn: *std.http.Client.Connection) void {
     const sock = conn.stream_writer.stream.socket.handle;
+    if (comptime builtin.target.os.tag == .windows) {
+        winsock.setTimeout(sock, .receive, recv_timeout_sec * 1000) catch {};
+        return;
+    }
     const timeout = std.posix.timeval{ .sec = recv_timeout_sec, .usec = 0 };
     std.posix.setsockopt(sock, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
 }
@@ -54,6 +59,7 @@ fn platformFromTarget() ?[]const u8 {
     const os: ?[]const u8 = switch (builtin.target.os.tag) {
         .macos => "macos",
         .linux => "linux",
+        .windows => "windows",
         else => null,
     };
     const arch: ?[]const u8 = switch (builtin.target.cpu.arch) {

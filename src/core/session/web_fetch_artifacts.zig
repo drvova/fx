@@ -1,4 +1,5 @@
 const std = @import("std");
+const file_permissions = @import("../shared/file_permissions.zig");
 const config_runtime = @import("../config/config_runtime.zig");
 const io_mod = @import("../shared/io.zig");
 const session_child_store = @import("session_child_store.zig");
@@ -339,7 +340,7 @@ fn ensureManagedDir(parent_path: []const u8, child_name: []const u8) !void {
         child.setPermissions(zio, std.Io.File.Permissions.fromMode(0o700)) catch
             return error.CorruptArtifactStore;
         const stat = try child.stat(zio);
-        if (stat.kind != .directory or stat.permissions.toMode() & 0o777 != 0o700) {
+        if (stat.kind != .directory or !file_permissions.isExactly(stat.permissions, 0o700)) {
             return error.CorruptArtifactStore;
         }
         return;

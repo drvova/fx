@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const file_permissions = @import("../shared/file_permissions.zig");
 const oauth = @import("../auth/oauth.zig");
 const io = @import("../shared/io.zig");
 const browser = @import("../auth/browser_callback.zig");
@@ -249,7 +250,7 @@ fn load(alloc: Allocator, dir: *io.VerifiedDir) !?Installation {
     };
     defer file.close(io.getIo());
     const stat = try file.stat(io.getIo());
-    if (stat.kind != .file or stat.nlink != 1 or stat.permissions.toMode() & 0o777 != 0o600) return error.UnsafeSlackCredentialFile;
+    if (stat.kind != .file or stat.nlink != 1 or !file_permissions.isExactly(stat.permissions, 0o600)) return error.UnsafeSlackCredentialFile;
     const bytes = try io.readFileToEnd(alloc, &file, 65536);
     const record = (try std.json.parseFromSlice(Installation, alloc, bytes, .{ .allocate = .alloc_always })).value;
     if (record.version != 1 or !valid_id(record.app_id, "A") or !valid_id(record.team_id, "T") or !valid_id(record.bot_user_id, "UW") or !valid_id(record.bot_id, "B") or !valid_id(record.installed_by, "UW") or !std.mem.eql(u8, record.scope, bot_scope) or record.access_token.len == 0 or

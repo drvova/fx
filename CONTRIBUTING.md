@@ -112,6 +112,20 @@ The script builds a ReleaseSafe binary and needs hyperfine. On macOS, process an
 python3 benchmarks/first_frame.py --binary /tmp/fx-before --binary ./zig-out/bin/fx
 ```
 
+### Build for Windows
+
+fx builds as a native Windows executable from any platform:
+
+```bash
+zig build -Dtarget=x86_64-windows -p zig-out-windows
+```
+
+The result is `zig-out-windows/bin/fx.exe`. CI cross-compiles it on every pull request, so a change that breaks the Windows build fails `Build & Test`.
+
+On Windows, fx reads the command line and environment as UTF-16, uses the Windows console in virtual terminal mode for the interactive terminal, and keeps its profile in `%USERPROFILE%\.fx` when `HOME` is unset. The shell tool runs commands through `cmd.exe`, and cancelling a command stops `cmd.exe` but not the processes it started. Hosted terminal sessions, `web_fetch`, signaling a process by ID, the MCP v2 engine, and `fx upgrade` still need POSIX and return an error on Windows.
+
+Wine can run the binary for a quick check, but Wine lacks file locks and the data Zig's DNS lookup reads, so commands that save state or use the network fail under Wine and not on Windows.
+
 ### Check a TLA+ model
 
 `tests/tla/` holds TLA+ models of fx, such as the session manager, the MCP engine and host, ACP, `/usage`, the shell tool, the workspace indexer, and libfx. Most come with Bun drivers that run the real binary and have TLC check what it did. CI runs the libfx model; run the matching checker yourself when you change behavior that one of the others describes. You need Java and `tla2tools.jar`, and `tests/tla/README.md` lists every model and covers setup.

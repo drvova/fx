@@ -1,4 +1,5 @@
 const std = @import("std");
+const file_permissions = @import("../shared/file_permissions.zig");
 const host = @import("../hosts/host.zig");
 const host_target = @import("../hosts/target.zig");
 const io_mod = @import("../shared/io.zig");
@@ -53,7 +54,7 @@ pub fn requireWritableInDir(dir: std.Io.Dir, file_name: []const u8) error{Creden
         if (err == error.FileNotFound) return false;
         return error.CredentialStorageUnavailable;
     };
-    if (stat.kind != .file or stat.nlink != 1 or stat.permissions.toMode() & 0o777 != 0o600) {
+    if (stat.kind != .file or stat.nlink != 1 or !file_permissions.isExactly(stat.permissions, 0o600)) {
         return error.CredentialStorageUnavailable;
     }
     return true;
@@ -90,7 +91,7 @@ fn profileFileFromHome(
     const stat = file.stat(io_mod.getIo()) catch return .unavailable;
     if (stat.kind != .file or
         stat.nlink != 1 or
-        stat.permissions.toMode() & 0o077 != 0 or
+        file_permissions.grantsGroupOrOther(stat.permissions) or
         stat.size == 0 or
         stat.size > max_bytes)
     {

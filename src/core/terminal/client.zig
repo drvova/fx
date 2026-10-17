@@ -586,6 +586,8 @@ pub const Runtime = struct {
     /// Opens the store and registry on the first request. Fails after the
     /// owned terminals were ended for exit, so none can start later.
     fn openBackend(self: *Runtime) !*Backend {
+        // Hosted terminals run on a POSIX pseudo-terminal; ConPTY is not ported.
+        if (comptime builtin.target.os.tag == .windows) return error.TerminalSessionsUnsupportedOnWindows;
         const zio = io_mod.getIo();
         self.backend_mutex.lockUncancelable(zio);
         defer self.backend_mutex.unlock(zio);

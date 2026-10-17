@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const io_mod = @import("../../core/shared/io.zig");
+const stdio = @import("../../core/shared/stdio.zig");
 const record_tape = @import("../../core/workspace/record_tape.zig");
 const types = @import("../../core/shared/types.zig");
 const terminal_diff = @import("../render_engine/terminal_diff.zig");
@@ -41,7 +42,7 @@ pub fn disableShadowVt(shell: anytype) void {
 pub fn writeFrameBytes(shell: anytype, metrics: *Metrics, bytes: []const u8) terminal_diff.FrameSinkWriteResult {
     var accepted_bytes: usize = 0;
     while (accepted_bytes < bytes.len) {
-        const written = shell.stdout_file.writeStreaming(
+        const written = stdio.resolveStdout(shell.stdout_file).writeStreaming(
             io_mod.getIo(),
             &.{},
             &.{bytes[accepted_bytes..]},

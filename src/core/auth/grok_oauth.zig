@@ -6,6 +6,7 @@ const debug_trace = @import("../shared/debug_trace.zig");
 const host = @import("../hosts/host.zig");
 const host_target = @import("../hosts/target.zig");
 const io_mod = @import("../shared/io.zig");
+const stdio = @import("../shared/stdio.zig");
 const login_flow = @import("login_flow.zig");
 const oauth = @import("oauth.zig");
 const oauth_transport = @import("oauth_transport.zig");
@@ -388,18 +389,12 @@ const StdinManualCodeReader = struct {
 
     fn poll(self: *StdinManualCodeReader) !?[]const u8 {
         if (self.closed) return null;
-        var fds = [_]std.posix.pollfd{.{
-            .fd = std.posix.STDIN_FILENO,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-        const ready = try std.posix.poll(&fds, 0);
-        if (ready == 0 or
-            (fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP)) == 0) return null;
+        const ready = try stdio.pollStdin(0);
+        if (!ready.readable and !ready.hung_up) return null;
 
         var chunk: [512]u8 = undefined;
         defer @memset(&chunk, 0);
-        const read_len = try std.posix.read(std.posix.STDIN_FILENO, &chunk);
+        const read_len = try stdio.readStdin(&chunk);
         if (read_len == 0) {
             self.closed = true;
             return if (self.len == 0) null else self.buffer[0..self.len];

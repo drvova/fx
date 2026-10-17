@@ -6,6 +6,7 @@ const managed_execution = @import("../../core/execution/managed_execution.zig");
 const display_width = @import("../../core/shared/display_width.zig");
 const input_action = @import("../../core/input/input_action.zig");
 const io_mod = @import("../../core/shared/io.zig");
+const stdio = @import("../../core/shared/stdio.zig");
 const shared_theme = @import("../../core/shared/theme.zig");
 const activity_status = @import("../../core/output/activity_status.zig");
 const activity_runtime = @import("../../core/output/activity_runtime.zig");
@@ -4470,7 +4471,8 @@ test "render diagnostic commit skips unchanged same-row paints" {
 }
 
 pub const TranscriptRuntime = struct {
-    stdout_file: std.Io.File = std.Io.File.stdout(),
+    /// Write through `stdio.resolveStdout`.
+    stdout_file: std.Io.File = stdio.default_stdout,
     test_frame_sink: if (@import("builtin").is_test) ?render_engine.terminal_diff.FrameSink else void = if (@import("builtin").is_test) null else {},
     sync_updates_enabled: bool = true,
     history_reset_uses_ris: bool = false,

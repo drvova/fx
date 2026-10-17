@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing_allocator = @import("../core/shared/testing_allocator.zig");
 const io_mod = @import("../core/shared/io.zig");
+const stdio = @import("../core/shared/stdio.zig");
 const host_target = @import("../core/hosts/target.zig");
 
 const Allocator = std.mem.Allocator;
@@ -324,7 +325,7 @@ pub const Reader = struct {
                 &.{destination},
             ) catch return 0;
         }
-        return std.posix.read(std.posix.STDIN_FILENO, destination) catch return 0;
+        return stdio.readStdin(destination) catch return 0;
     }
 
     fn readFromSource(self: *Reader) usize {

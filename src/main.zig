@@ -2,8 +2,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const io_mod = @import("core/shared/io.zig");
+const stdio = @import("core/shared/stdio.zig");
+const windows_console = @import("core/shared/windows_console.zig");
 
 pub const version = "0.0.14";
+
+/// Gives Windows file permissions the mode helpers the rest of fx uses.
+pub const std_options_FilePermissions = @import("core/shared/file_permissions.zig").Override;
 
 const app_lifecycle = @import("core/app/app_lifecycle.zig");
 const provider_runtime = @import("core/app/provider_runtime.zig");
@@ -520,7 +525,8 @@ const App = struct {
     }
 
     pub fn terminalTitle(self: *const Self) host.TerminalTitle {
-        return ui_render.terminalTitleFor(&self.shell.stdout_file);
+        const out = stdio.resolveStdout(self.shell.stdout_file);
+        return ui_render.terminalTitleFor(&out);
     }
 
     pub fn writeProgramStatus(self: *Self, report: []const u8) void {
@@ -3449,7 +3455,8 @@ const App = struct {
 };
 
 comptime {
-    if (!builtin.is_test and !host_target.is_wasm) {
+    // Windows leaves `main` to the standard library's start code.
+    if (!builtin.is_test and !host_target.is_wasm and builtin.target.os.tag != .windows) {
         @export(&main, .{ .name = "main" });
     }
 }
@@ -3489,9 +3496,43 @@ pub fn runWasmTerminal(init: std.process.Init) !void {
     }
 }
 
-pub fn main(c_argc: c_int, c_argv: [*][*:0]c_char, c_envp: [*:null]?[*:0]c_char) callconv(.c) c_int {
+/// POSIX enters through libc's `main` to keep startup fast. On Windows,
+/// libc's `argv` and `envp` use the ANSI code page, so fx starts from the
+/// UTF-16 command line and environment instead.
+pub const main = if (builtin.target.os.tag == .windows) mainWindows else mainPosix;
+
+fn mainPosix(c_argc: c_int, c_argv: [*][*:0]c_char, c_envp: [*:null]?[*:0]c_char) callconv(.c) c_int {
     mainC(c_argc, c_argv, c_envp) catch return 1;
     return 0;
+}
+
+/// Lives for the whole process, as `io_mod.setEnvironMap` requires.
+var windows_environ_map: std.process.Environ.Map = undefined;
+
+fn mainWindows(init: std.process.Init.Minimal) u8 {
+    mainWindowsInner(init) catch return 1;
+    return 0;
+}
+
+fn mainWindowsInner(init: std.process.Init.Minimal) !void {
+    const alloc = processAllocator();
+    windows_environ_map = try init.environ.createMap(alloc);
+    io_mod.setEnvironMap(&windows_environ_map);
+    windows_console.prepareOutput();
+
+    const all_args = try init.args.toSlice(alloc);
+    const cli_args = if (all_args.len > 0) all_args[1..] else all_args;
+    if (io_mod.getenv("FX_BENCH") != null and cli_args.len == 0) {
+        switch (cli_surface.parse(builtin_commands.top_level_registry, &.{})) {
+            .interactive => exitFast(0),
+            else => exitFast(1),
+        }
+    }
+    if (cli_args.len > 0 and isTopLevelHelp(cli_args)) {
+        try writeTopLevelHelpFast(null);
+        exitFast(0);
+    }
+    try runEntry(init.args, init.environ.block, cli_args);
 }
 
 fn mainC(c_argc: c_int, c_argv: [*][*:0]c_char, c_envp: [*:null]?[*:0]c_char) !void {
@@ -3553,7 +3594,7 @@ fn mainC(c_argc: c_int, c_argv: [*][*:0]c_char, c_envp: [*:null]?[*:0]c_char) !v
     try runNonBenchmark(raw_args, raw_env, cli_args);
 }
 
-fn writeTopLevelHelpFast(raw_env: RawEnviron) !void {
+fn writeTopLevelHelpFast(raw_env: ?RawEnviron) !void {
     const columns = topLevelHelpColumns(raw_env);
     const style = topLevelHelpStyle(raw_env);
     var buffer: [builtin_commands.top_level_help_fast_buffer_bytes]u8 = undefined;
@@ -3570,9 +3611,13 @@ fn writeTopLevelHelpFast(raw_env: RawEnviron) !void {
 
 fn runNonBenchmark(raw_args: []const [*:0]const u8, raw_env: RawEnviron, cli_args: []const [:0]const u8) !void {
     io_mod.setRawEnviron(raw_env);
+    try runEntry(argsFromRaw(raw_args), environBlockFromRaw(raw_env), cli_args);
+}
 
+/// Everything after the platform entry has installed the environment.
+fn runEntry(process_args: std.process.Args, env_block: std.process.Environ.Block, cli_args: []const [:0]const u8) !void {
     const alloc = processAllocator();
-    const auth_mode = credentials.parseAuthMode(rawEnvValue(raw_env, "FX_AUTH_MODE")) catch {
+    const auth_mode = credentials.parseAuthMode(io_mod.getenv("FX_AUTH_MODE")) catch {
         try writeStderrFast("fx: FX_AUTH_MODE must be local or host-managed\n");
         exitFast(1);
     };
@@ -3586,8 +3631,6 @@ fn runNonBenchmark(raw_args: []const [*:0]const u8, raw_env: RawEnviron, cli_arg
     var early_threaded: ?std.Io.Threaded = null;
     defer if (early_threaded) |*threaded| threaded.deinit();
     if (needsEarlyThreadedIo(cli_args)) {
-        const env_block = environBlockFromRaw(raw_env);
-        const process_args = argsFromRaw(raw_args);
         early_threaded = std.Io.Threaded.init(alloc, .{
             .argv0 = .init(process_args),
             .environ = .{ .block = env_block },
@@ -3598,8 +3641,6 @@ fn runNonBenchmark(raw_args: []const [*:0]const u8, raw_env: RawEnviron, cli_arg
     const before = try app_entry_runtime.runBeforeInteractive(alloc, cli_args, cfg);
     switch (before) {
         .interactive => |launch| {
-            const env_block = environBlockFromRaw(raw_env);
-            const process_args = argsFromRaw(raw_args);
             var threaded = std.Io.Threaded.init(alloc, .{
                 .argv0 = .init(process_args),
                 .environ = .{ .block = env_block },
@@ -3625,16 +3666,19 @@ fn runNonBenchmark(raw_args: []const [*:0]const u8, raw_env: RawEnviron, cli_arg
 }
 
 fn rawArgs(c_argc: c_int, c_argv: [*][*:0]c_char) []const [*:0]const u8 {
+    if (comptime builtin.target.os.tag == .windows) unreachable;
     const argc: usize = @intCast(c_argc);
     const argv: [*][*:0]const u8 = @ptrCast(c_argv);
     return argv[0..argc];
 }
 
 fn argsFromRaw(raw_args: []const [*:0]const u8) std.process.Args {
+    if (comptime builtin.target.os.tag == .windows) unreachable;
     return .{ .vector = raw_args };
 }
 
 fn environBlockFromRaw(raw_env: RawEnviron) std.process.Environ.Block {
+    if (comptime builtin.target.os.tag == .windows) unreachable;
     var count: usize = 0;
     while (raw_env[count] != null) : (count += 1) {}
     return .{ .slice = raw_env[0..count :null] };
@@ -3655,6 +3699,11 @@ fn rawEnvHas(raw_env: RawEnviron, comptime key: []const u8) bool {
     return rawEnvValue(raw_env, key) != null;
 }
 
+/// `raw_env` when the entry has one, else the installed environment.
+fn entryEnvValue(raw_env: ?RawEnviron, comptime key: []const u8) ?[]const u8 {
+    return if (raw_env) |raw| rawEnvValue(raw, key) else io_mod.getenv(key);
+}
+
 fn rawEnvValue(raw_env: RawEnviron, comptime key: []const u8) ?[]const u8 {
     @setRuntimeSafety(false);
     var i: usize = 0;
@@ -3666,9 +3715,9 @@ fn rawEnvValue(raw_env: RawEnviron, comptime key: []const u8) ?[]const u8 {
     return null;
 }
 
-fn topLevelHelpColumns(raw_env: RawEnviron) usize {
+fn topLevelHelpColumns(raw_env: ?RawEnviron) usize {
     if (stdoutTerminalColumns()) |columns| return columns;
-    if (rawEnvValue(raw_env, "COLUMNS")) |value| {
+    if (entryEnvValue(raw_env, "COLUMNS")) |value| {
         if (parseColumnCount(value)) |columns| return columns;
     }
     if (comptime builtin.link_libc) {
@@ -3679,9 +3728,9 @@ fn topLevelHelpColumns(raw_env: RawEnviron) usize {
     return command_specs.top_level_help_default_width;
 }
 
-fn topLevelHelpStyle(raw_env: RawEnviron) command_specs.HelpStyle {
-    const no_color = rawEnvHas(raw_env, "NO_COLOR");
-    const dumb_terminal = if (rawEnvValue(raw_env, "TERM")) |term| std.mem.eql(u8, term, "dumb") else false;
+fn topLevelHelpStyle(raw_env: ?RawEnviron) command_specs.HelpStyle {
+    const no_color = entryEnvValue(raw_env, "NO_COLOR") != null;
+    const dumb_terminal = if (entryEnvValue(raw_env, "TERM")) |term| std.mem.eql(u8, term, "dumb") else false;
     return topLevelHelpStyleForValues(stdoutIsTerminal(), no_color, dumb_terminal);
 }
 
@@ -3690,12 +3739,17 @@ fn topLevelHelpStyleForValues(is_terminal: bool, no_color: bool, dumb_terminal: 
 }
 
 fn stdoutIsTerminal() bool {
-    if (comptime builtin.target.os.tag == .windows or !builtin.link_libc) return false;
+    if (comptime builtin.target.os.tag == .windows) return windows_console.isConsole(windows_console.stdoutHandle());
+    if (comptime !builtin.link_libc) return false;
     return std.c.isatty(std.posix.STDOUT_FILENO) != 0;
 }
 
 fn stdoutTerminalColumns() ?usize {
-    if (comptime builtin.target.os.tag == .windows or !builtin.link_libc) return null;
+    if (comptime builtin.target.os.tag == .windows) {
+        const size = windows_console.windowSize(windows_console.stdoutHandle()) catch return null;
+        return size.cols;
+    }
+    if (comptime !builtin.link_libc) return null;
 
     var ws: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
     const req: c_int = @intCast(std.c.T.IOCGWINSZ);
@@ -3770,6 +3824,8 @@ fn exitFast(code: u8) noreturn {
     if (comptime builtin.link_libc and builtin.target.os.tag != .windows and builtin.target.os.tag != .wasi) {
         std.c._exit(@intCast(code));
     }
+    // libc `exit` runs the handler that restores the console code page.
+    if (comptime builtin.target.os.tag == .windows) std.c.exit(code);
     std.process.exit(code);
 }
 
@@ -4092,12 +4148,18 @@ fn handleSigWinchNative(_: std.posix.SIG) callconv(.c) void {
     resize_interlock.noteResizeSignal();
 }
 
+fn handleConsoleResize(_: i32) callconv(.c) void {
+    resize_interlock.noteResizeSignal();
+}
+
 fn handleSigWinchWeb() callconv(.c) void {
     resize_interlock.noteResizeSignal();
 }
 
 const handle_sigwinch: app_lifecycle.ResizeHandler = if (host_target.is_wasm)
     handleSigWinchWeb
+else if (builtin.target.os.tag == .windows)
+    handleConsoleResize
 else
     handleSigWinchNative;
 

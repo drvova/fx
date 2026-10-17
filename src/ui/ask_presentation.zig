@@ -3,6 +3,7 @@ const assistant_presentation = @import("../core/agent/assistant_presentation.zig
 const diff_mod = @import("../core/output/diff.zig");
 const types = @import("../core/shared/types.zig");
 const io_mod = @import("../core/shared/io.zig");
+const stdio = @import("../core/shared/stdio.zig");
 const render_engine = @import("render_engine.zig");
 const render_request = @import("render_request.zig");
 const shared_theme = @import("../core/shared/theme.zig");
@@ -33,7 +34,7 @@ pub const Runtime = struct {
         user: types.UserTurn,
         no_color: bool,
     ) !Runtime {
-        const layout = zeroFooterLayout(try ui_terminal.queryLayout(std.posix.STDOUT_FILENO, 0));
+        const layout = zeroFooterLayout(try ui_terminal.queryLayout(stdio.handle(.stdout), 0));
         var terminal = shell_runtime.TerminalState{};
         const cursor = probeTerminal(&terminal, layout, no_color);
         return initConfigured(
@@ -195,7 +196,7 @@ pub const Runtime = struct {
     }
 
     fn refreshGeometry(self: *Runtime) !void {
-        const queried = ui_terminal.queryLayout(std.posix.STDOUT_FILENO, 0) catch return;
+        const queried = ui_terminal.queryLayout(stdio.handle(.stdout), 0) catch return;
         const layout = zeroFooterLayout(queried);
         if (layout.rows == self.shell.layout.rows and layout.cols == self.shell.layout.cols) return;
         try shell_runtime.applyResizeWithLayout(&self.shell, &self.metrics, layout, true);
@@ -290,7 +291,7 @@ pub const Runtime = struct {
     }
 
     fn writeTerminalBytes(self: *Runtime, bytes: []const u8) !void {
-        try self.shell.stdout_file.writeStreamingAll(io_mod.getIo(), bytes);
+        try stdio.resolveStdout(self.shell.stdout_file).writeStreamingAll(io_mod.getIo(), bytes);
         self.metrics.ansi_bytes += bytes.len;
         if (self.shell.shadow_vt) |shadow| try shadow.feed(bytes);
     }
@@ -404,7 +405,7 @@ fn probeTerminal(
         const fallback_light = if (no_color) false else ui_render.explicitThemeOverride() orelse false;
         ui_render.initTheme(fallback_light, null);
     }
-    if (std.c.isatty(std.posix.STDIN_FILENO) == 0) return fallback;
+    if (!stdio.isTty(.stdin)) return fallback;
     terminal.captureOriginalTermios() catch return fallback;
     terminal.enableRawMode() catch return fallback;
     defer terminal.disableRawMode();

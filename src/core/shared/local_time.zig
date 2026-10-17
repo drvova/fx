@@ -141,12 +141,49 @@ const Tm = extern struct {
 
 extern "c" fn localtime_r(timer: *const std.c.time_t, result: *Tm) ?*Tm;
 
+const SystemTime = extern struct {
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+};
+
+extern "kernel32" fn FileTimeToSystemTime(file_time: *const u64, system_time: *SystemTime) callconv(.winapi) i32;
+extern "kernel32" fn SystemTimeToFileTime(system_time: *const SystemTime, file_time: *u64) callconv(.winapi) i32;
+extern "kernel32" fn SystemTimeToTzSpecificLocalTime(zone: ?*const anyopaque, utc: *const SystemTime, local: *SystemTime) callconv(.winapi) i32;
+
+/// Seconds between 1601-01-01, where Windows file times start, and 1970-01-01.
+const windows_epoch_offset_s: i64 = 11_644_473_600;
+
+/// The offset the current Windows time zone applies at `epoch_s`, with
+/// daylight saving time. Windows names zones in full ("Pacific Standard
+/// Time") rather than by abbreviation, so the name is empty.
+fn windowsZoneAt(epoch_s: i64) Zone {
+    const ticks_s = std.math.add(i64, epoch_s, windows_epoch_offset_s) catch return .utc;
+    if (ticks_s < 0) return .utc;
+    const utc_ft: u64 = std.math.mul(u64, @intCast(ticks_s), 10_000_000) catch return .utc;
+    var utc: SystemTime = undefined;
+    var local_st: SystemTime = undefined;
+    var local_ft: u64 = 0;
+    if (FileTimeToSystemTime(&utc_ft, &utc) == 0) return .utc;
+    if (SystemTimeToTzSpecificLocalTime(null, &utc, &local_st) == 0) return .utc;
+    if (SystemTimeToFileTime(&local_st, &local_ft) == 0) return .utc;
+    const diff_ticks = @as(i128, local_ft) - @as(i128, utc_ft);
+    const offset_s = std.math.cast(i32, @divTrunc(diff_ticks, 10_000_000)) orelse return .utc;
+    return .{ .offset_s = offset_s, .name = "" };
+}
+
 /// The local zone in effect at `epoch_s`, or UTC when the C library cannot
 /// convert the time. WASI has no time zone data, so it reads UTC. The name
 /// borrows C library storage, so `local` copies it into its reading straight
 /// away.
 fn localZoneAt(epoch_s: i64) Zone {
     if (builtin.is_test) return test_zone;
+    if (builtin.target.os.tag == .windows) return windowsZoneAt(epoch_s);
     if (!builtin.link_libc or builtin.target.os.tag == .wasi) return .utc;
     const timer = std.math.cast(std.c.time_t, epoch_s) orelse return .utc;
     var tm: Tm = undefined;

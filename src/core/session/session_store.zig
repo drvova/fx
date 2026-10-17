@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing_allocator = @import("../shared/testing_allocator.zig");
 const builtin = @import("builtin");
+const file_permissions = @import("../shared/file_permissions.zig");
 const config_runtime = @import("../config/config_runtime.zig");
 const model_provider = @import("../config/model_provider.zig");
 const debug_trace = @import("../shared/debug_trace.zig");
@@ -486,7 +487,7 @@ pub const Store = struct {
     fn readRememberedSessionFile(alloc: Allocator, file: *std.Io.File) ![]u8 {
         const stat = try file.stat(io_mod.getIo());
         // An atomic replacement can unlink the valid version already opened here.
-        if (stat.kind != .file or stat.nlink > 1 or stat.permissions.toMode() & 0o777 != 0o600 or stat.size > 256) {
+        if (stat.kind != .file or stat.nlink > 1 or !file_permissions.isExactly(stat.permissions, 0o600) or stat.size > 256) {
             return error.InvalidRememberedSession;
         }
         const bytes = try io_mod.readFileToEnd(alloc, file, 256);
@@ -527,7 +528,7 @@ pub const Store = struct {
             else => return err,
         };
         defer profile.close(zio);
-        if ((try profile.stat(zio)).permissions.toMode() & 0o777 != 0o700) return error.SessionPathUnsafe;
+        if (!file_permissions.isExactly((try profile.stat(zio)).permissions, 0o700)) return error.SessionPathUnsafe;
         if (create) return try io_mod.openOrCreateVerifiedPrivateDirFromDir(profile, "continue");
         var directory = profile.openDir(zio, "continue", .{
             .iterate = true,
@@ -537,7 +538,7 @@ pub const Store = struct {
             else => return err,
         };
         errdefer directory.close(zio);
-        if ((try directory.stat(zio)).permissions.toMode() & 0o777 != 0o700) return error.SessionPathUnsafe;
+        if (!file_permissions.isExactly((try directory.stat(zio)).permissions, 0o700)) return error.SessionPathUnsafe;
         return .{ .dir = directory };
     }
 
@@ -4192,7 +4193,7 @@ fn prepareWritableSessionDir(dir: std.Io.Dir) !void {
         return error.PrivateStatePermissionsUnsupported;
     const stat = try dir.stat(io_mod.getIo());
     if (stat.kind != .directory) return error.SessionPathUnsafe;
-    if (stat.permissions.toMode() & 0o777 != 0o700) {
+    if (!file_permissions.isExactly(stat.permissions, 0o700)) {
         return error.PrivateStatePermissionsUnsupported;
     }
 }

@@ -1884,7 +1884,7 @@ fn fallbackCommandArtifactDir(alloc: Allocator) ![]u8 {
 }
 
 fn currentProcessId() u64 {
-    return @intCast(std.c.getpid());
+    return @intCast(io_mod.currentProcessId());
 }
 
 fn elapsedMs(started_ms: i64, finished_ms: i64) u64 {
@@ -3512,6 +3512,8 @@ fn signalProcessGroup(pid: std.posix.pid_t, signal: std.posix.SIG) !void {
 }
 
 fn terminateRemainingProcessGroup(pid: std.posix.pid_t) void {
+    // Windows commands never get a process group id.
+    if (comptime builtin.target.os.tag == .windows) return;
     signalProcessGroup(pid, std.posix.SIG.KILL) catch |err| {
         debug_trace.logf(
             "core",

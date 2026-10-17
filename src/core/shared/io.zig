@@ -1,6 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const darwin_process_spawn = @import("darwin_process_spawn.zig");
+/// Re-exported for modules, such as the indexer, that may import only this file.
+pub const file_permissions = @import("file_permissions.zig");
+const windows_io = @import("windows_io.zig");
 
 pub const RawEnviron = [*:null]const ?[*:0]const u8;
 
@@ -24,7 +27,11 @@ pub fn setIo(zio: std.Io) void {
 }
 
 fn process_io_for(comptime os_tag: std.Target.Os.Tag, zio: std.Io) std.Io {
-    return if (os_tag == .macos) darwin_process_spawn.wrap(zio) else zio;
+    return switch (os_tag) {
+        .macos => darwin_process_spawn.wrap(zio),
+        .windows => windows_io.wrap(zio),
+        else => zio,
+    };
 }
 
 pub fn getIo() std.Io {
@@ -448,7 +455,8 @@ pub fn getenv(key: []const u8) ?[]const u8 {
 /// The environment array libc holds now, valid only until the process next
 /// changes its environment.
 fn liveLibcEnviron() ?RawEnviron {
-    if (comptime !builtin.link_libc) return null;
+    // mingw has no `environ`; Windows installs an environment map instead.
+    if (comptime !builtin.link_libc or builtin.target.os.tag == .windows) return null;
     return @ptrCast(std.c.environ);
 }
 
@@ -457,7 +465,9 @@ fn liveLibcEnviron() ?RawEnviron {
 /// unset, so fx never builds profile paths relative to the current folder.
 /// Child processes still inherit `HOME` unchanged.
 pub fn homeDir() ?[]const u8 {
-    const home = getenv("HOME") orelse return null;
+    // Windows shells rarely set HOME; USERPROFILE is the profile directory.
+    const home = getenv("HOME") orelse
+        if (comptime builtin.target.os.tag == .windows) getenv("USERPROFILE") orelse return null else return null;
     if (!std.Io.Dir.path.isAbsolute(home)) return null;
     return home;
 }
@@ -661,19 +671,25 @@ fn validateRelativeLeaf(name: []const u8) !void {
 fn verifyPrivateRegularFile(file: std.Io.File) !void {
     const stat = try file.stat(getIo());
     if (stat.kind != .file or stat.nlink != 1) return error.DurablePathUnsafe;
-    if (stat.permissions.toMode() & 0o777 != 0o600) return error.PrivateStatePermissionsUnsupported;
+    // Windows has no mode bits. The user profile's inherited ACL keeps fx's
+    // state private there.
+    if (!file_permissions.isExactly(stat.permissions, 0o600)) return error.PrivateStatePermissionsUnsupported;
 }
 
 fn verifyPrivateDirectory(dir: std.Io.Dir) !void {
     const stat = try dir.stat(getIo());
     if (stat.kind != .directory) return error.DurablePathUnsafe;
-    if (stat.permissions.toMode() & 0o777 != 0o700) return error.PrivateStatePermissionsUnsupported;
+    // Windows has no mode bits. The user profile's inherited ACL keeps fx's
+    // state private there.
+    if (!file_permissions.isExactly(stat.permissions, 0o700)) return error.PrivateStatePermissionsUnsupported;
 }
 
 /// The handle must come from an `openDir` that requested iteration. Linux returns an
 /// `O_PATH` descriptor otherwise, and `fsync` rejects those with `EBADF`.
 pub fn syncVerifiedDir(dir: std.Io.Dir) !void {
-    if (comptime builtin.target.os.tag == .windows) return error.OperationUnsupported;
+    // NTFS journals directory metadata, so a rename is durable without a
+    // directory flush.
+    if (comptime builtin.target.os.tag == .windows) return;
     while (true) {
         const rc = std.c.fsync(dir.handle);
         if (rc == 0) return;
@@ -841,7 +857,7 @@ pub fn durableReplaceVerifiedWithOps(
         return error.DurableReplacePostRenameFailed;
     };
     if (final_stat.kind != .file or final_stat.nlink != 1 or
-        final_stat.permissions.toMode() & 0o777 != 0o600)
+        !file_permissions.isExactly(final_stat.permissions, 0o600))
     {
         return error.DurableReplacePostRenameFailed;
     }
@@ -1008,6 +1024,15 @@ fn existingFilePermissions(path: []const u8) ?std.Io.File.Permissions {
     return stat.permissions;
 }
 
+extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+
+/// This process's ID. On Windows `std.c.getpid` is not an integer.
+pub fn currentProcessId() i64 {
+    if (comptime builtin.target.os.tag == .windows) return GetCurrentProcessId();
+    if (comptime builtin.target.os.tag == .wasi) return 0;
+    return std.c.getpid();
+}
+
 pub fn sleep(ns: u64) void {
     getIo().sleep(.{ .nanoseconds = @intCast(ns) }, .real) catch {};
 }
@@ -1072,6 +1097,11 @@ pub fn makeDirRecursive(path: []const u8) !void {
 }
 
 pub fn realpathAlloc(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (comptime builtin.target.os.tag == .windows) {
+        var result_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const len = try std.Io.Dir.cwd().realPathFile(getIo(), path, &result_buf);
+        return alloc.dupe(u8, result_buf[0..len]);
+    }
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const path_z = std.mem.printSentinel(&buf, "{s}", .{path}, 0) catch return error.NameTooLong;
     var result_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -1100,6 +1130,11 @@ fn handlePathAlloc(alloc: std.mem.Allocator, handle: std.Io.File.Handle) ![]u8 {
         const rc = std.c.fcntl(handle, @as(c_int, 50), @intFromPtr(&path_buf));
         if (rc == -1) return error.HandlePathUnavailable;
         return alloc.dupe(u8, std.mem.sliceTo(&path_buf, 0));
+    } else if (comptime builtin.target.os.tag == .windows) {
+        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const file: std.Io.File = .{ .handle = handle, .flags = .{ .nonblocking = false } };
+        const len = file.realPath(getIo(), &path_buf) catch return error.HandlePathUnavailable;
+        return alloc.dupe(u8, path_buf[0..len]);
     } else if (comptime builtin.target.os.tag == .linux) {
         var fd_path_buf: [64:0]u8 = undefined;
         _ = std.mem.printSentinel(&fd_path_buf, "/proc/self/fd/{d}", .{handle}, 0) catch return error.HandlePathUnavailable;
@@ -1148,6 +1183,10 @@ pub fn dirRealpathAlloc(alloc: std.mem.Allocator, dir: std.Io.Dir, sub_path: []c
         const joined = try std.Io.Dir.path.join(alloc, &.{ dir_path, sub_path });
         defer alloc.free(joined);
         return realpathAlloc(alloc, joined);
+    } else if (comptime builtin.target.os.tag == .windows) {
+        var result_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const len = try dir.realPathFile(getIo(), if (sub_path.len == 0) "." else sub_path, &result_buf);
+        return alloc.dupe(u8, result_buf[0..len]);
     } else if (comptime builtin.target.os.tag == .wasi) {
         if (std.Io.Dir.path.isAbsolute(sub_path)) return alloc.dupe(u8, sub_path);
         return std.Io.Dir.path.resolveAlloc(alloc, &.{sub_path});
